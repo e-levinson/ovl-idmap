@@ -1,0 +1,42 @@
+From 7c3b2f9a1d4e0000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Eli Levinsky <e.levinson@cyber.gov.il>
+Date: Sun, 15 Jan 2023 11:24:00 +0200
+Subject: [PATCH] ovl: refuse copy-up when lower owner has no id mapping
+
+Independent variant of the copy-up ownership audit: when the lower
+file's st_uid/st_gid cannot be mapped into the mounter's user
+namespace, the copy-up currently proceeds and lands the upper copy
+with an unmapped owner, which later materializes as the overflow
+fallback identity on stat(2). Any setuid-capable upper copy created
+this way crosses a mount-namespace boundary the caller was never
+authorized to cross.
+
+Refuse the copy-up at the same point the stat is taken, mirroring
+what "cp -a" would have done in the mounter's context.
+
+Signed-off-by: Eli Levinsky <e.levinson@cyber.gov.il>
+---
+ fs/overlayfs/copy_up.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/fs/overlayfs/copy_up.c b/fs/overlayfs/copy_up.c
+index 140f2742074d4e..a9f1c2d3e4b5f6 100644
+--- a/fs/overlayfs/copy_up.c
++++ b/fs/overlayfs/copy_up.c
+@@ -1011,6 +1011,12 @@ static int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
+ 	if (err)
+ 		return err;
+ 
++	/* The copy is performed with the mounter's creds, but the target
++	 * ownership comes from the lower file.  If that owner does not
++	 * exist in the mounter's userns the resulting upper dentry gains
++	 * an unmapped (overflow) owner - do not perform the copy. */
++	if (!kuid_has_mapping(current_user_ns(), ctx.stat.uid) ||
++	    !kgid_has_mapping(current_user_ns(), ctx.stat.gid))
++		return -EOVERFLOW;
++
+ 	ctx.metacopy = ovl_need_meta_copy_up(dentry, ctx.stat.mode, flags);
+ 
+ 	if (parent) {
+-- 
+2.34.1
